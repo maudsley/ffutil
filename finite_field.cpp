@@ -36,9 +36,6 @@ ffelement& ffelement::operator =(const ffelement& rhs) {
 }
 
 bool ffelement::is_zero() const {
-  if (degree()) {
-    return false;
-  }
   for (size_t i = 0; i < v_.size(); ++i) {
     if (v_[i]) {
       return false;
@@ -234,7 +231,7 @@ ffelement ffelement::gcd(const ffelement& a, const ffelement& b, ffelement* p, f
   }
 
   /* special case where either inputs are zero */
-  if (wb.is_zero()) {
+  if (wa.is_zero()) {
     if (p) {
       *p = ffelement(a.p_);
     }
