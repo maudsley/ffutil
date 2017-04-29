@@ -1,8 +1,10 @@
 #ifndef __FINITE_FIELD_H__
 #define __FINITE_FIELD_H__
 
-#include <exception>
+#include <stdexcept>
 #include <vector>
+#include <iostream>
+#include <sstream>
 
 class ffelement_exception : public std::logic_error {
 public:
@@ -16,7 +18,7 @@ public:
   ffelement() {
   }
 
-  ffelement(const std::vector<uint8_t>& p) : p_(p) {
+  explicit ffelement(const std::vector<uint8_t>& p) : p_(p) {
     v_ = std::vector<uint8_t>(1, 0); /* zero */
   }
 
@@ -48,6 +50,22 @@ public:
     return *this;
   }
 
+  bool is_zero() const {
+    if (degree()) {
+      return false;
+    }
+    for (size_t i = 0; i < v_.size(); ++i) {
+      if (v_[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool is_one() const {
+    return v_.size() >= 1 && v_[0] == 1;
+  }
+
   size_t degree() const {
     size_t d = 0;
     for (size_t i = 0; i < v_.size(); ++i) {
@@ -58,6 +76,42 @@ public:
       }
     }
     return d;
+  }
+
+  std::string to_string() const {
+    if (is_zero()) {
+      return "{0}";
+    }
+    std::stringstream stream;
+    stream << "{";
+    size_t term_count = 0;
+    size_t d = degree() + 1;
+    for (size_t i = 0; i < d; ++i) {
+      size_t j = d - i - 1;
+      size_t byte = j / 8;
+      size_t bit = j % 8;
+      size_t value = (v_[byte] >> bit) & 1;
+      if (value) {
+        stream << (i != 0 ? " + " : "");
+        switch (j) {
+        case 0:
+          stream << "1";
+          break;
+        case 1:
+          stream << "x";
+          break;
+        default:
+          stream << "x^" << j;
+          break;
+        }
+        term_count++;
+      }
+    }
+    if (!term_count) {
+      stream << "0";
+    }
+    stream << "}";
+    return stream.str();
   }
 
   bool operator ==(const ffelement& rhs) const {
@@ -140,7 +194,7 @@ public:
       }
     } else {
       r = rhs;
-      for (size_t i = 0; i < rhs.v_.size(); ++i) {
+      for (size_t i = 0; i < v_.size(); ++i) {
         r.v_[i] ^= v_[i];
       }
     }
@@ -152,7 +206,103 @@ public:
     return *this;
   }
 
-private:
+  ffelement operator *(const ffelement& rhs) const {
+    if (!vectors_match(p_, rhs.p_)) {
+      throw ffelement_exception("Polynomials do not match.");
+    }
+    ffelement r;
+    ffelement n = mul_no_reduction(*this, rhs);
+    ffelement poly(p_, p_);
+    full_divide(n, poly, &r);
+    //std::cout << "Multiplying: " << to_string() << std::endl;
+    //std::cout << " by: " << rhs.to_string() << std::endl;
+    //std::cout << " got: " << r.to_string() << std::endl;
+    return r;
+  }
+
+  ffelement& operator *=(const ffelement& rhs) {
+    *this = *this * rhs;
+    return *this;
+  }
+
+  ffelement inverse() const {
+    ffelement inv;
+    ffelement poly(p_, p_);
+    ffelement r = gcd(*this, poly, &inv, 0);
+    if (!r.is_one()) {
+      throw ffelement_exception("Element has no inverse");
+    }
+    return inv;
+  }
+
+  static ffelement gcd(const ffelement& a, const ffelement& b, ffelement* p, ffelement* q) {
+    /* sort */
+    bool swap = false;
+    ffelement wa, wb;
+    if (a < b) {
+      wa = a;
+      wb = b;
+    } else {
+      wa = b;
+      wb = a;
+      swap = true;
+    }
+
+    /* special case where either inputs are zero */
+    if (wb.is_zero()) {
+      if (p) {
+        *p = ffelement(a.p_);
+      }
+      if (q) {
+        *q = ffelement(a.p_);
+      }
+      return ffelement(a.p_); /* zero */
+    }
+
+    /* init bezout coefficients */
+    ffelement wp[2], wq[2];
+    wp[0] = wq[1] = monomial(0, a.p_); /* one */
+    wp[1] = wq[0] = ffelement(a.p_); /* zero */
+
+    //std::cout << "Computing GCD of " << std::endl;
+    //std::cout << " " << wa.to_string() << std::endl;
+    //std::cout << " " << wb.to_string() << std::endl;
+
+    /* extended Euclidean algorithm */
+    ffelement r;
+    do {
+      ffelement d = full_divide(wa, wb, &r);
+      ffelement u = wp[0] + d * wp[1];
+      ffelement v = wq[0] + d * wq[1];
+      wa = wb;
+      wb = r;
+      wp[0] = wp[1];
+      wq[0] = wq[1];
+      wp[1] = u;
+      wq[1] = v;
+      //std::cout << "Remainder is: " << r.to_string() << std::endl;
+    } while (!r.is_zero());
+
+    if (swap) {
+      ffelement t = wp[0];
+      wp[0] = wq[0];
+      wq[0] = t;
+    }
+
+    if (p) {
+      *p = wp[0];
+    }
+
+    if (q) {
+      *q = wq[0];
+    }
+
+    //std::cout << "GCD is: " << wa.to_string() << std::endl;
+    //std::cout << "P is: " << wp[0].to_string() << std::endl;
+    //std::cout << "Q is: " << wq[0].to_string() << std::endl;
+
+    return wa;
+  }
 
   static ffelement full_divide(const ffelement& lhs, const ffelement& rhs, ffelement* remainder) {
     if (!vectors_match(lhs.p_, rhs.p_)) {
@@ -164,7 +314,33 @@ private:
       }
       return ffelement(lhs.p_); /* zero */
     }
-    
+    //std::cout << "Dividing " << lhs.to_string() << std::endl;
+    //std::cout << " by " << rhs.to_string() << std::endl;
+    ffelement q(lhs.p_);
+    ffelement w = lhs;
+    while (w.degree() >= rhs.degree()) {
+      //std::cout << "Working is: " << w.to_string() << std::endl;
+      size_t delta = w.degree() - rhs.degree();
+      ffelement m = monomial(delta, lhs.p_);
+      //std::cout << "Monomial is: " << m.to_string() << std::endl;
+      q += m;
+      //std::cout << "Quotient is: " << q.to_string() << std::endl;
+      ffelement s = mul_no_reduction(rhs, m);
+      //std::cout << "Will eliminate: " << s.to_string() << std::endl;
+      w += s;
+      if (w.is_zero()) {
+        break;
+      }
+      if (q.is_zero()) {
+        break;
+      }
+    }
+    //std::cout << "Final quotient is: " << q.to_string() << std::endl;
+    //std::cout << "Final remainder is: " << w.to_string() << std::endl;
+    if (remainder) {
+      *remainder = w;
+    }
+    return q;
   }
 
   static ffelement mul_no_reduction(const ffelement& lhs, const ffelement& rhs) {
@@ -175,16 +351,16 @@ private:
     ffelement k = rhs;
     for (size_t i = 0; i < lhs.v_.size(); ++i) {
       for (size_t j = 0; j < 8; ++j) {
-        if ((rhs.v_[i] >> j) & 1) {
+        if ((lhs.v_[i] >> j) & 1) {
           r += k;
         }
-        k = mul_by_x2_no_reduction(k);
+        k = mul_by_x_no_reduction(k);
       }
     }
     return r;
   }
 
-  static ffelement mul_by_x2_no_reduction(const ffelement& arg) {
+  static ffelement mul_by_x_no_reduction(const ffelement& arg) {
     ffelement r = arg;
     int carry = 0;
     for (size_t i = 0; i < r.v_.size(); ++i) {
@@ -197,6 +373,20 @@ private:
       r.v_.push_back(1);
     }
     return r;
+  }
+
+  static ffelement monomial(const size_t degree, const std::vector<uint8_t>& p) {
+    ffelement r(p);
+    if (!degree) {
+      r.v_[0] = 1;
+      return r;
+    } else {
+      size_t bytes = degree / 8;
+      size_t index = degree % 8;
+      r.v_ = std::vector<uint8_t>(bytes + 1, 0);
+      r.v_[bytes] |= 1 << index;
+      return r;
+    }
   }
 
   static bool vectors_match(const std::vector<uint8_t>& lhs, const std::vector<uint8_t>& rhs) {
@@ -212,7 +402,7 @@ private:
   }
 
   std::vector<uint8_t> v_; /* element */
-  std::vector<uint8_t> p_; /* ideal */
+  std::vector<uint8_t> p_; /* polynomial (ideal) */
 
 };
 

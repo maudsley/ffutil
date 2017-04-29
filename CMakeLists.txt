@@ -17,6 +17,7 @@ include_directories(.)
 # build unit test executable
 
 set(TestSources
+  finite_field.cpp
   unit_test.cpp
 )
 
